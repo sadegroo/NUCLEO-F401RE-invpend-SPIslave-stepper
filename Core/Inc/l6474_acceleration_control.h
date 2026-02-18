@@ -40,14 +40,14 @@ typedef struct {
 } L6474_Acceleration_Control_TypeDef;
 
 // local function prototypes
-void Init_L6472_Acceleration_Control(L6474_Init_t *gInitParams, float t_sample);
-void Run_L6472_Acceleration_Control(int16_t acceleration_input);
-void StepClockHandler_L6472_Acceleration_Control(void);
-void PostProcess_StepClockHandler_L6472_Acceleration_Control(void);
-float GetSampleTime_L6472_Acceleration_Control(void);
-int32_t GetPosition_L6472_Acceleration_Control(void);
-int16_t GetVelocity_L6472_Acceleration_Control(void);
-int16_t GetAcceleration_L6472_Acceleration_Control(void);
+void Init_L6474_Acceleration_Control(L6474_Init_t *gInitParams, float t_sample);
+void Run_L6474_Acceleration_Control(int16_t acceleration_input);
+void StepClockHandler_L6474_Acceleration_Control(void);
+void PostProcess_StepClockHandler_L6474_Acceleration_Control(void);
+float GetSampleTime_L6474_Acceleration_Control(void);
+int32_t GetPosition_L6474_Acceleration_Control(void);
+int16_t GetVelocity_L6474_Acceleration_Control(void);
+int16_t GetAcceleration_L6474_Acceleration_Control(void);
 
 // extern function prototypes
 

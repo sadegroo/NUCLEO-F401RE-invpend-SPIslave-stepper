@@ -68,8 +68,7 @@ static int16_t send_number2=0;       // stepper motor angle in microsteps
 static int16_t send_number3=0;	   // stepper motor angle in microsteps per second
 
 static int16_t accel_cmd = 0;
-static int16_t current_cmd = 0;
-static int16_t prev_current_cmd = 0;
+static int16_t current_cmd = 0;  // Reserved for future use (received via SPI)
 static int32_t encoder_pos=0;
 static int32_t rotor_pos=0;
 static int16_t rotor_vel=0;
@@ -137,7 +136,7 @@ int main(void)
   /* USER CODE BEGIN 1 */
   uint8_t encoder_range_error;
 
-  uint8_t state_main = START_STATE_MAIN;
+  MainState_t state_main = START_STATE_MAIN;
   //uint32_t state_main_counter = 0; // counts the amount of times the same state was entered
   uint32_t state_cycle_cnt = 0; // counts the amount of times the circular part of the main state machine is looped
   static Chrono_TypeDef main_cycletimer= {0,0,0.0}; //Chronometer for circular part of the main state machine
@@ -204,7 +203,7 @@ int main(void)
   */
 
   //initialize acceleration control
-  Init_L6472_Acceleration_Control(&gL6474InitParams, T_SAMPLE);
+  Init_L6474_Acceleration_Control(&gL6474InitParams, T_SAMPLE);
 
   //init chronometer
   Chrono_Init();
@@ -295,10 +294,10 @@ int main(void)
 		{
 		// sequential states
 		//-------------------
-		  case 0:
-			  // START state: wait for DMA SPI to have valid date
+		  case STATE_START:
+			  // Wait for DMA SPI to have valid data
 			  if (spi_txrx_flag == 1){
-				  state_main=1;
+				  state_main = STATE_READ;
 				  Chrono_Mark(&main_cycletimer);
 				  uart_buf_len = sprintf(uart_buf, "SPI connection established. Starting system... \r\n");
 				  HAL_UART_Transmit(&huart2, (uint8_t *)uart_buf, uart_buf_len, 100);
@@ -306,7 +305,7 @@ int main(void)
 			  break;
 		// looping states
 		//-----------------
-		  case 1:
+		  case STATE_READ:
 			// Read encoder
 			encoder_range_error = encoder_position_read(&encoder_inst, &htim2);
 			encoder_pos = encoder_inst.position_steps;
@@ -314,56 +313,61 @@ int main(void)
 			// read rotor position
 			if (rotor_pos_cnt % STEPPER_POSITION_DECIMATION == 0) {
 				rotor_pos_cnt = 0;
-				rotor_pos = GetPosition_L6472_Acceleration_Control();
+				rotor_pos = GetPosition_L6474_Acceleration_Control();
 			}
 			rotor_pos_cnt++;
 
 			// read rotor velocity
-			rotor_vel = GetVelocity_L6472_Acceleration_Control();
+			rotor_vel = GetVelocity_L6474_Acceleration_Control();
 
 			__disable_irq();
-			send_number1 = swap_Endians_16((int16_t)encoder_pos);
-			send_number2 = swap_Endians_16((int16_t)rotor_pos);
+			send_number1 = swap_Endians_16(__SATURATE_INT16(encoder_pos));
+			send_number2 = swap_Endians_16(__SATURATE_INT16(rotor_pos));
 			send_number3 = swap_Endians_16(rotor_vel);
 			__enable_irq();
 
-			state_main++;
+			state_main = STATE_WAIT_SPI;
 			break;
-		  case 2:
+		  case STATE_WAIT_SPI:
+			__disable_irq();
 			if (spi_txrx_flag == 1){
 				spi_txrx_flag = 0;
-				state_main=4;
-				__disable_irq();
 				accel_cmd = swap_Endians_16(recv_number1);
+				__enable_irq();
+				state_main = STATE_CONTROL;
+			} else {
 				__enable_irq();
 			}
 			// keep track of waiting time in this state
-			if (Chrono_GetDiffNoMark(&main_cycletimer) > 1.5 * T_SAMPLE) {
+			if (Chrono_GetDiffNoMark(&main_cycletimer) > OVERTIME_FACTOR * T_SAMPLE) {
 				 overtime_cnt++;
-				 state_main=3;
+				 state_main = STATE_OVERTIME;
 				 uart_buf_len = sprintf(uart_buf, "overtime: %" PRIu32 "\r\n", overtime_cnt);
 				 //uart_buf_len = sprintf(uart_buf, "overtime: %u\r\n", overtime_cnt);
 				 HAL_UART_Transmit_IT(&huart2, (uint8_t *)uart_buf, uart_buf_len);
 			 }
 			break;
 
-		  case 3:
+		  case STATE_OVERTIME:
 			  // keep periodically reading rotor to check for overrange
-			 if (Chrono_GetDiffNoMark(&main_cycletimer) > 0.05) {
+			 if (Chrono_GetDiffNoMark(&main_cycletimer) > ROTOR_CHECK_INTERVAL_S) {
 				 Chrono_Mark(&main_cycletimer);
-				 rotor_pos = GetPosition_L6472_Acceleration_Control();
+				 rotor_pos = GetPosition_L6474_Acceleration_Control();
 			 }
+			__disable_irq();
 			if (spi_txrx_flag == 1){
 				spi_txrx_flag = 0;
-				Chrono_Mark(&main_cycletimer);
-				state_main=4;
-				__disable_irq();
 				accel_cmd = swap_Endians_16(recv_number1);
 				current_cmd = swap_Endians_16(recv_number2);
+				(void)current_cmd;  // Reserved for future use
+				__enable_irq();
+				Chrono_Mark(&main_cycletimer);
+				state_main = STATE_CONTROL;
+			} else {
 				__enable_irq();
 			}
 			break;
-		  case 4:
+		  case STATE_CONTROL:
 			  // control actions
 
 #ifdef POSITION_CONTROL
@@ -374,33 +378,38 @@ int main(void)
 #endif
 #ifdef ACCELERATION_CONTROL
 
-				Run_L6472_Acceleration_Control(accel_cmd);
+				Run_L6474_Acceleration_Control(accel_cmd);
 				//Debug_TimerStatus();
 #endif
-				state_main = 1;
+				state_main = STATE_READ;
 				state_cycle_cnt++;
 				Chrono_Mark(&main_cycletimer);
 			  break;
-		  case 50:
+		  case STATE_ERROR_ROTOR:
 			  // Rotor out of safe range
 			  BSP_MotorControl_HardStop(0);
-			  uart_buf_len = sprintf(uart_buf, "Error 50: Rotor out of safe range\r\n");
+			  uart_buf_len = sprintf(uart_buf, "Error: Rotor out of safe range\r\n");
 			  HAL_UART_Transmit(&huart2, (uint8_t *)uart_buf, uart_buf_len, 100);
-			  state_main=99;
-		  case 99:
-			  ;// do nothting wait state
+			  state_main = STATE_HALT;
+			  break;
+		  case STATE_HALT:
+			  // Do nothing - wait state
 		  default:
 			  break;
 		}
 
 		// update ARR of PWM timer when count is close to 0
-		PostProcess_StepClockHandler_L6472_Acceleration_Control();
+		PostProcess_StepClockHandler_L6474_Acceleration_Control();
 
 		// Error checks
-		if (state_main!=99 && (float)labs(rotor_pos) > MAX_DEFLECTION_REV * STEPS_PER_TURN) {
-			// go to error state 50
-			state_main = 50;
-			}
+		if (state_main != STATE_HALT && (float)labs(rotor_pos) > MAX_DEFLECTION_REV * STEPS_PER_TURN) {
+			// go to error state: rotor out of safe range
+			state_main = STATE_ERROR_ROTOR;
+		}
+		if (encoder_range_error != 0) {
+			// Encoder position overflowed - log but continue
+			err_cnt++;
+		}
 	  // count any communication errors
 	  if (spi_err_flag)
 	  {
@@ -658,19 +667,19 @@ uint8_t encoder_position_read(Quadrature_Encoder_TypeDef *encoder, TIM_HandleTyp
 	    // Calculate delta explicitly with rollover handling
 	    int32_t delta = (int32_t)(encoder->cnt3 - encoder->previous_cnt3);
 
-	    encoder->position_steps += delta;
+	    // Check for overflow before addition
+	    if (delta > 0 && encoder->position_steps > (INT32_MAX - delta)) {
+	        range_error = 1;
+	        encoder->position_steps = INT32_MAX;
+	    } else if (delta < 0 && encoder->position_steps < (INT32_MIN - delta)) {
+	        range_error = -1;
+	        encoder->position_steps = INT32_MIN;
+	    } else {
+	        encoder->position_steps += delta;
+	    }
 
 	    // Update previous counter
 	    encoder->previous_cnt3 = encoder->cnt3;
-
-	    // Handle range limits
-	    if (encoder->position_steps < INT32_MIN) {
-	        range_error = -1;
-	        encoder->position_steps = INT32_MIN;
-	    } else if (encoder->position_steps > INT32_MAX) {
-	        range_error = 1;
-	        encoder->position_steps = INT32_MAX;
-	    }
 
 	    // Subtract zeroing offset
 	    encoder->position_steps -= encoder->position_init;

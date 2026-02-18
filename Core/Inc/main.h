@@ -37,7 +37,7 @@ extern "C" {
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-// #include <stdbool.h>
+// Note: stdbool.h conflicts with motor.h which defines its own bool type
 #include "l6474.h"
 #include "x_nucleo_ihmxx.h"
 #include "x_nucleo_ihm01a1_stm32f4xx.h"
@@ -87,10 +87,22 @@ typedef struct {
 		);\
 } while(0)
 
-// program flow
-#define START_STATE_MAIN 0
+// Main state machine states
+typedef enum {
+    STATE_START = 0,      // Wait for first SPI transaction
+    STATE_READ = 1,       // Read encoders, prepare TX buffer
+    STATE_WAIT_SPI = 2,   // Wait for SPI completion
+    STATE_OVERTIME = 3,   // Handle overtime, keep reading rotor position
+    STATE_CONTROL = 4,    // Apply acceleration command
+    STATE_ERROR_ROTOR = 50, // Rotor out of safe range
+    STATE_HALT = 99       // Halted state
+} MainState_t;
 
-#define T_SAMPLE 0.001 // should match the sample time in MATLAB model
+#define START_STATE_MAIN STATE_START
+
+#define T_SAMPLE 0.001f // should match the sample time in MATLAB model
+#define OVERTIME_FACTOR 1.5f // multiplier for T_SAMPLE to detect overtime
+#define ROTOR_CHECK_INTERVAL_S 0.05f // interval for rotor position checks in overtime state
 
 #define SPI_BUFFER_SIZE   6
 #define UART_BUFFER_SIZE  150
@@ -118,6 +130,11 @@ typedef struct {
 
 
 #define __HAS_OPPOSITE_SIGNS(a, b) (((a) < 0) != ((b) < 0))
+
+// Saturating cast from int32_t to int16_t (clamps to INT16_MIN/INT16_MAX)
+#define __SATURATE_INT16(val) \
+    ((int16_t)((val) > INT16_MAX ? INT16_MAX : ((val) < INT16_MIN ? INT16_MIN : (val))))
+
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
