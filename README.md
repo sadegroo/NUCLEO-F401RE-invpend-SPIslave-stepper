@@ -74,6 +74,8 @@ This project uses the [STEVAL-EDUKIT01](https://www.st.com/en/evaluation-tools/s
 - **1 kHz control loop** synchronized with Raspberry Pi
 - **SPI slave communication** with DMA (circular buffer)
 - **Big-endian protocol** for cross-platform compatibility
+- **HSE clock source** (8 MHz external crystal) for accurate timing
+- **Clock Security System (CSS)** enabled for fault detection
 - **Safety features**: overcurrent protection, rotor deflection limits
 
 ### Control Modes

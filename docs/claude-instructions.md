@@ -249,11 +249,42 @@ L6474_Init_t gL6474InitParams = {
 };
 ```
 
+## Clock Configuration
+
+The system uses **HSE (High-Speed External)** oscillator from the ST-LINK's 8 MHz crystal for accurate timing:
+
+```c
+// In SystemClock_Config() - main.c
+RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+RCC_OscInitStruct.PLL.PLLM = 4;      // HSE/4 = 2 MHz
+RCC_OscInitStruct.PLL.PLLN = 84;     // 2 MHz * 84 = 168 MHz (VCO)
+RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;  // 168 MHz / 2 = 84 MHz (SYSCLK)
+RCC_OscInitStruct.PLL.PLLQ = 4;
+
+// Clock Security System enabled
+HAL_RCC_EnableCSS();
+```
+
+**Clock Tree:**
+- HSE: 8 MHz (from ST-LINK MCO)
+- PLL Input: 2 MHz (HSE / PLLM)
+- VCO: 168 MHz (PLL Input * PLLN)
+- SYSCLK: 84 MHz (VCO / PLLP)
+- APB1: 42 MHz (SYSCLK / 2)
+- APB2: 84 MHz (SYSCLK / 1)
+
+**Why HSE over HSI?**
+- HSE provides better accuracy (±0.25% vs ±1% for HSI)
+- More stable over temperature variations
+- Required for accurate SPI timing and control loops
+
 ## Timing & Interrupts
 
 | Component | Frequency | Priority | Notes |
 |-----------|-----------|----------|-------|
-| System Clock | 84 MHz | - | HSI + PLL |
+| System Clock | 84 MHz | - | HSE + PLL |
 | Step Clock (TIM PWM) | Variable | Depends on speed | Step pulse generation |
 | SPI3 DMA | RPi-driven (~1 kHz) | 0 | Highest priority |
 | Control Loop | 1 kHz target | main loop | |
@@ -370,3 +401,5 @@ Memory region         Used Size  Region Size  %age Used
 | SPI Buffer | 10 bytes | 6 bytes |
 | Motor Encoder | Yes (differential) | No (open loop) |
 | PWM Frequency | 16 kHz (FOC) | Variable (step clock) |
+| Clock Source | HSE (8 MHz) | HSE (8 MHz) |
+| Clock Security | CSS enabled | CSS enabled |
