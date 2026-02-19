@@ -40,6 +40,14 @@ void Stop_L6474_Acceleration_Control(void){
 	hAccelCtrl.state = 0;
 }
 
+void Reset_L6474_Acceleration_Control(void){
+	hAccelCtrl.state = 0;           // Back to waiting for first non-zero command
+	hAccelCtrl.acceleration = 0;
+	hAccelCtrl.velocity = 0;
+	hAccelCtrl.position = 0;
+	hAccelCtrl.speed = hAccelCtrl.min_speed;
+}
+
 void Run_L6474_Acceleration_Control(int16_t acceleration_input) {
 
 	switch (hAccelCtrl.state) {

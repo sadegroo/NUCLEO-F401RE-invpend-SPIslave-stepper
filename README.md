@@ -73,14 +73,18 @@ This project uses the [STEVAL-EDUKIT01](https://www.st.com/en/evaluation-tools/s
 - **Acceleration Control** mode for direct stepper motor control
 - **1 kHz control loop** synchronized with Raspberry Pi
 - **SPI slave communication** with DMA (circular buffer)
+- **Pendulum velocity calculation** with EMA filtering (configurable alpha)
 - **Big-endian protocol** for cross-platform compatibility
 - **HSE clock source** (8 MHz external crystal) for accurate timing
 - **Clock Security System (CSS)** enabled for fault detection
 - **Safety features**: overcurrent protection, rotor deflection limits
+- **Fault recovery**: Two-button-press sequence to recover from rotor overrange faults
+- **Modular architecture**: state machine in `pendulum_control.c`, config in `app_config.h`
+- **Debug modes**: UART output @ 921600 baud for encoder/stepper diagnostics
 
 ### Control Modes
 
-The project supports different control modes (defined in `main.h`):
+The project supports different control modes (defined in `app_config.h`):
 
 | Mode | Description |
 |------|-------------|
@@ -90,20 +94,21 @@ The project supports different control modes (defined in `main.h`):
 
 ### SPI Protocol
 
-6-byte bidirectional exchange at 1 kHz (big-endian):
+8-byte bidirectional exchange at 1 kHz (big-endian):
 
 **STM32 -> Raspberry Pi:**
 | Bytes | Type | Description |
 |-------|------|-------------|
 | 0-1 | int16 | Pendulum position (encoder counts) |
-| 2-3 | int16 | Stepper motor position (microsteps) |
-| 4-5 | int16 | Stepper motor velocity (microsteps/sec) |
+| 2-3 | int16 | Pendulum velocity (counts/sec / DIV) |
+| 4-5 | int16 | Rotor position (microsteps) |
+| 6-7 | int16 | Rotor velocity (microsteps/sec) |
 
 **Raspberry Pi -> STM32:**
 | Bytes | Type | Description |
 |-------|------|-------------|
 | 0-1 | int16 | Acceleration command (microsteps/s^2) |
-| 2-5 | - | Reserved |
+| 2-7 | - | Reserved |
 
 ### Building and Flashing
 
@@ -157,7 +162,7 @@ cmake --build --preset Debug && STM32_Programmer_CLI -c port=SWD -w build/Debug/
 
 ### Motor Configuration
 
-Key parameters in `main.h`:
+Key parameters in `app_config.h`:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
@@ -219,6 +224,17 @@ Detailed documentation is available in the [`docs/`](docs/) folder:
 | Steps per Revolution | 3200 (microsteps) |
 | Max Current | 1200 mA (configurable) |
 | Overcurrent Threshold | 2000 mA |
+
+## Fault Recovery (Blue Button)
+
+When the rotor exceeds the safe deflection limit (`MAX_DEFLECTION_REV`), the system enters fault mode:
+
+1. **Fault triggered**: Motor hard-stops (holds position with power)
+2. **First button press**: Motor disabled (HiZ mode, can be moved manually)
+3. **Move rotor to center** by hand
+4. **Second button press**: Position reset to 0, motor enabled, waiting for first non-zero command
+
+Note: SPI communication continues during fault - sensor data is still transmitted to RPi.
 
 ## License
 

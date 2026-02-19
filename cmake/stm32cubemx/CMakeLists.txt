@@ -31,6 +31,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f4xx_it.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f4xx_hal_msp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/l6474_acceleration_control.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/pendulum_control.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/chrono.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/syscalls.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/sysmem.c

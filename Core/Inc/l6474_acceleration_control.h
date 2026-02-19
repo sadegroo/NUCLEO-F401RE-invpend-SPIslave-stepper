@@ -42,6 +42,8 @@ typedef struct {
 // local function prototypes
 void Init_L6474_Acceleration_Control(L6474_Init_t *gInitParams, float t_sample);
 void Run_L6474_Acceleration_Control(int16_t acceleration_input);
+void Stop_L6474_Acceleration_Control(void);
+void Reset_L6474_Acceleration_Control(void);
 void StepClockHandler_L6474_Acceleration_Control(void);
 void PostProcess_StepClockHandler_L6474_Acceleration_Control(void);
 float GetSampleTime_L6474_Acceleration_Control(void);

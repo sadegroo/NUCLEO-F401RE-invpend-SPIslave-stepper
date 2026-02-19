@@ -525,16 +525,6 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
   }
 }
 
-/**
-  * @brief External Line Callback
-  * @param[in] GPIO_Pin pin number
-  * @retval None
-  */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  if (GPIO_Pin == BSP_MOTOR_CONTROL_BOARD_FLAG_PIN)
-  {
-    BSP_MotorControl_FlagInterruptHandler();
-  }
- }
+/* HAL_GPIO_EXTI_Callback is now implemented in main.c to handle both
+ * user button (B1) and motor flag interrupts */
 /* USER CODE END 1 */

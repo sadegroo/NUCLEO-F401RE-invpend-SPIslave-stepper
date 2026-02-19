@@ -49,7 +49,8 @@ cmake --build build/Debug --target clean
 
 | File | Purpose |
 |------|---------|
-| [Core/Src/main.c](Core/Src/main.c) | System init, state machine, SPI protocol, encoder reading |
+| [Core/Src/main.c](Core/Src/main.c) | System init, peripheral config, calls StateMachine_Run() |
+| [Core/Src/pendulum_control.c](Core/Src/pendulum_control.c) | State machine, SPI protocol, encoder reading, velocity calculation |
 | [Core/Src/l6474_acceleration_control.c](Core/Src/l6474_acceleration_control.c) | Stepper motor acceleration control interface |
 | [Core/Src/chrono.c](Core/Src/chrono.c) | DWT-based cycle timing (84 MHz resolution) |
 | [Core/Src/stm32f4xx_it.c](Core/Src/stm32f4xx_it.c) | Interrupt handlers |
@@ -58,7 +59,9 @@ cmake --build build/Debug --target clean
 
 | File | Key Definitions |
 |------|-----------------|
-| [Core/Inc/main.h](Core/Inc/main.h) | Control modes, motor params, SPI/UART buffer sizes |
+| [Core/Inc/app_config.h](Core/Inc/app_config.h) | All compile-time config: debug flags, motor params, timing, velocity filter |
+| [Core/Inc/pendulum_control.h](Core/Inc/pendulum_control.h) | State machine types, VelocityCalc_t, encoder structs |
+| [Core/Inc/main.h](Core/Inc/main.h) | HAL includes, GPIO pin definitions |
 | [Core/Inc/l6474_acceleration_control.h](Core/Inc/l6474_acceleration_control.h) | Acceleration control state structure |
 | [Core/Inc/chrono.h](Core/Inc/chrono.h) | `RCC_SYS_CLOCK_FREQ = 84000000` |
 
@@ -72,13 +75,23 @@ cmake --build build/Debug --target clean
 
 ## Control Modes
 
-The project supports different control modes (defined in `main.h`):
+The project supports different control modes (defined in `app_config.h`):
 
 ```c
 #define ACCELERATION_CONTROL     // Active - direct acceleration commands
 //#define VELOCITY_CONTROL       // NOT IMPLEMENTED
 //#define POSITION_CONTROL       // GoTo position commands
 ```
+
+### Debug and Test Modes (app_config.h)
+
+| Flag | Description |
+|------|-------------|
+| `TEST_MODE_NO_MOTOR` | Disable motor power stage for safe testing |
+| `SKIP_SPI_WAIT` | Run state machine without waiting for RPi |
+| `DEBUG_PENDULUM_ENCODER` | Print encoder counts via UART |
+| `DEBUG_STEPPER` | Print stepper state/position via UART |
+| `TEST_MODE_BUTTON` | Blue button triggers test acceleration |
 
 ### Acceleration Control Mode
 
@@ -162,7 +175,7 @@ UART2 is connected to ST-LINK virtual COM port (no external wiring needed):
 | TX | PA2 | To PC via ST-LINK |
 | RX | PA3 | From PC via ST-LINK |
 
-**Baud rate**: 115200 (8N1)
+**Baud rate**: 921600 (8N1, non-blocking DMA)
 
 ### Wiring Checklist
 
@@ -175,43 +188,45 @@ UART2 is connected to ST-LINK virtual COM port (no external wiring needed):
 
 ## SPI Protocol
 
-**Buffer size**: 6 bytes, **Endianness**: Big-endian
+**Buffer size**: 8 bytes (4x int16), **Endianness**: Big-endian
 
 ### RX from Raspberry Pi
 ```
 Bytes [0-1]: int16_t accel_cmd       // Acceleration command in microsteps/s^2
-Bytes [2-3]: int16_t recv_number2    // Reserved
-Bytes [4-5]: int16_t recv_number3    // Reserved
+Bytes [2-7]: reserved                // Reserved for future use
 ```
 
 ### TX to Raspberry Pi
 ```
-Bytes [0-1]: int16_t encoder_pos     // Pendulum encoder position (counts)
-Bytes [2-3]: int16_t rotor_pos       // Motor position (microsteps)
-Bytes [4-5]: int16_t rotor_vel       // Motor velocity (microsteps/sec)
+Bytes [0-1]: int16_t pendulum_pos    // Pendulum encoder position (counts)
+Bytes [2-3]: int16_t pendulum_vel    // Pendulum velocity (counts/sec / DIV)
+Bytes [4-5]: int16_t rotor_pos       // Motor position (microsteps)
+Bytes [6-7]: int16_t rotor_vel       // Motor velocity (microsteps/sec)
 ```
 
-## State Machine (`main.c` while loop)
+## State Machine (`pendulum_control.c`)
+
+The state machine is implemented in `StateMachine_Run()`, called from main loop:
 
 ```
-STATE 0 (START)    -> Wait for first SPI transaction
+STATE_START (0)    -> Wait for first SPI transaction
        |
        v
-STATE 1 (READ)     -> Read encoders, prepare TX buffer
+STATE_READ (1)     -> Read encoders, calculate velocity, prepare TX buffer
        |
        v
-STATE 2 (WAIT_SPI) -> Wait for SPI completion
+STATE_WAIT_SPI (2) -> Wait for SPI completion
        |
        v (timeout)
-STATE 3 (OVERTIME) -> Handle overtime, keep reading rotor position
+STATE_OVERTIME (3) -> Handle overtime, keep reading rotor position
        |
        v
-STATE 4 (CONTROL)  -> Apply acceleration command via L6474
+STATE_CONTROL (4)  -> Apply acceleration command via L6474
        |
-       +---------> [loop back to STATE 1]
+       +---------> [loop back to STATE_READ]
 
-STATE 50 (ERROR)   -> Rotor out of safe range, hard stop
-STATE 99 (HALT)    -> Halted state
+Note: STATE_ERROR_ROTOR and STATE_HALT are unused. Faults are handled via
+      `rotor_fault_active` flag - SPI communication continues during fault.
 ```
 
 ### Safety Limits
@@ -221,6 +236,24 @@ STATE 99 (HALT)    -> Halted state
 ```
 
 If the rotor exceeds `MAX_DEFLECTION_REV * STEPS_PER_TURN` (3200 microsteps), the motor hard stops.
+
+### Fault Recovery
+
+When `rotor_fault_active` flag is set (rotor exceeds MAX_DEFLECTION_REV):
+
+| Phase | Button Press | Action |
+|-------|--------------|--------|
+| Fault detected | - | `HardStop()` - motor holds position |
+| First press | Blue button | `CmdDisable()` - motor unpowered (HiZ) |
+| User action | - | Manually move rotor to center |
+| Second press | Blue button | `CmdSetParam(ABS_POS, 0)` + `CmdEnable()` |
+
+Key functions:
+- `Button_HaltRecovery_Handler()` - ISR sets `button_press_pending` flag
+- `ProcessButtonPress()` - Main loop handles recovery (BSP functions use SPI)
+- `Reset_L6474_Acceleration_Control()` - Resets acceleration control state to 0
+
+Note: `BSP_MotorControl_CmdResetPos()` is NOT implemented for L6474 - use `CmdSetParam(0, L6474_ABS_POS, 0)` instead.
 
 ## Motor Configuration
 
@@ -289,7 +322,7 @@ HAL_RCC_EnableCSS();
 | SPI3 DMA | RPi-driven (~1 kHz) | 0 | Highest priority |
 | Control Loop | 1 kHz target | main loop | |
 
-## Critical Constants
+## Critical Constants (app_config.h)
 
 ```c
 // Timing
@@ -297,6 +330,10 @@ T_SAMPLE            = 0.001f    // 1 kHz sample time
 
 // Encoder
 COUNTS_PER_TURN     = 2400      // Pendulum encoder counts per revolution
+
+// Velocity Calculation
+PEND_VEL_FILTER_ALPHA   = 0.1f  // EMA filter coefficient (0.01-1.0)
+PEND_VEL_RESOLUTION_DIV = 1     // Velocity output divisor for SPI
 
 // Stepper Motor
 STEPS_PER_TURN      = 3200      // Microsteps per revolution (1/16 stepping)
@@ -307,7 +344,7 @@ MAX_TORQUE_CONFIG   = 1200      // Torque current in mA
 OVERCURRENT_THRESHOLD = 2000    // OCD threshold in mA
 
 // Buffer sizes
-SPI_BUFFER_SIZE     = 6         // 6 bytes = 3x int16
+SPI_BUFFER_SIZE     = 8         // 8 bytes = 4x int16
 UART_BUFFER_SIZE    = 150
 ```
 
@@ -329,10 +366,11 @@ BSP_MotorControl_SetNbDevices(BSP_MOTOR_CONTROL_BOARD_ID_L6474, 1);
 BSP_MotorControl_Init(BSP_MOTOR_CONTROL_BOARD_ID_L6474, &gL6474InitParams);
 BSP_MotorControl_AttachFlagInterrupt(MyFlagInterruptHandler);
 Init_L6472_Acceleration_Control(&gL6474InitParams, T_SAMPLE);
-Chrono_Init();
+Pendulum_Init();           // Initialize state machine and encoders
+SPI_StartCommunication();  // Start SPI DMA circular buffer
 
 // In main.c while loop:
-// State machine runs, calls Run_L6472_Acceleration_Control(accel_cmd)
+StateMachine_Run();        // Run state machine (in pendulum_control.c)
 PostProcess_StepClockHandler_L6472_Acceleration_Control();
 ```
 
@@ -398,8 +436,11 @@ Memory region         Used Size  Region Size  %age Used
 | Motor Type | BLDC (FOC) | Stepper (L6474) |
 | Control SDK | MC SDK v6.4.1 | L6474 BSP |
 | Control Input | Torque (mNm) | Acceleration (steps/s^2) |
-| SPI Buffer | 10 bytes | 6 bytes |
+| SPI Buffer | 10 bytes (5x int16) | 8 bytes (4x int16) |
 | Motor Encoder | Yes (differential) | No (open loop) |
 | PWM Frequency | 16 kHz (FOC) | Variable (step clock) |
 | Clock Source | HSE (8 MHz) | HSE (8 MHz) |
 | Clock Security | CSS enabled | CSS enabled |
+| UART Baud | 921600 | 921600 |
+| State Machine | pendulum_control.c | pendulum_control.c |
+| Config File | app_config.h | app_config.h |
